@@ -1,0 +1,501 @@
+---
+title: "MATH3070Assignment_5"
+output: word_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Assignment 5
+NOTE: I have omitted most of your code from the output of this RMarkdown file in order to save space, as I didn’t think it would be useful for you to re-read your own code. I have just included the relevant chunks for each question, as well as my own bits of code.
+
+```{r, echo=FALSE}
+# Preliminaries
+library(raster)     # For working with rasters
+library(ggplot2)    # For making figures
+library(colorRamps) # for Matlab like colour scheme
+library(RNetCDF)    # For reading/manipulating netCDFs
+library(maptools)   # For mapping
+library(gridExtra)  # For formatting plots
+data(wrld_simpl)    # World map
+```
+
+## INFORMTION ABOUT THE MODEL
+
+We are using cesm_rcp85, which is a GCM (General Circulation Model), with greenhouse gas forcing under RCP8.5 (high emissions), from 2006-2100. 
+
+The integrated primary production comes from a biogeochemical model (for nutrients and phytoplankton) forced by the GCM.
+
+```{r, echo=FALSE}
+# Sea surface temperature (SST)
+SST_nc <- open.nc("cesm_rcp85_temp_zs_monthly_200601-210012.nc") 
+
+# Time period: Jan 2006 to Dec 2100
+SST <- var.get.nc(SST_nc, 'to')   # Extract SST data from SST_nc and put into an array
+dim(SST)                          
+Lats <- var.get.nc(SST_nc, 'lat') # Extract lats from netcdf
+Lons <- var.get.nc(SST_nc, 'lon') # Extract lons from netcdf
+```
+
+Note that the dimensions of the SST array are: [360, 180, 1140]. These represent 360 deg longitude, 180 deg latitude, and 1140 months between jan 2006 and dec 2100
+
+## Q1. Plotting sea surface for Dec 2006 and Dec 2100
+
+```{r, echo=FALSE}
+df <- expand.grid(Lon = Lons, Lat = Lats)
+df$SST_2006 <- as.vector(SST[,,12]) # Dec 2006 (12th month of the data = Dec 2006)
+df$SST_2100 <- as.vector(SST[,,1140]) # Dec 2100 (1140th month = Dec 2100)
+
+#Note the NA values in the dataframe is just where there is land and so no data on the number of fish there.
+```
+
+```{r}
+# Plot SST for Dec 2006
+plot1 <- ggplot(data = df, aes(x = Lon, y = Lat, fill = SST_2006)) + 
+  geom_raster() + scale_fill_gradientn(colours = matlab.like(12), guide = "colorbar", na.value = "gray") + 
+  theme_bw() + labs(fill = "") + ggtitle("SST Dec 2006")
+
+# Plot SST for Dec 2100
+plot2 <- ggplot(data = df, aes(x = Lon, y = Lat, fill = SST_2100)) + 
+  geom_raster() + scale_fill_gradientn(colours = matlab.like(12), guide = "colorbar", na.value = "gray") + 
+  theme_bw() + labs(fill = "") + ggtitle("SST Dec 2100")
+
+grid.arrange(plot1, plot2, ncol=1)
+```
+
+From these plots we can see a global increase in temperature, in some regions more than others. To look at these changes more closely, I plot the difference in sea surface temperature from 2006 to 2100.
+
+```{R}
+# Plot SST difference between Dec 2006 and 2100
+ggplot(data = df, aes(x = Lon, y = Lat, fill = SST_2100 - SST_2006)) + 
+  geom_raster() + scale_fill_gradientn(colours = matlab.like(12), guide = "colorbar", na.value = "gray") + 
+  theme_bw() + labs(fill = "") + ggtitle(" SST difference between Dec 2006 and 2100")
+
+#compute average temperature increase in sea surface and atmosphere
+ss =mean(df$SST_2100 - df$SST_2006, na.rm=T)
+ss
+a = ss*1.5
+a
+```
+
+Here we can see increases of at least 4 degrees centigrade in places such as the south-eastern coast of Australia and around the top of Asia.
+
+I also calculated the mean increase in global temperature from 2006 to 2100. This was 2.28 deg (3 sf) for the sea surface, and then I multiplied this by 1.5 to estimate the increase in atmospheric temperature, which was 3.42 deg (3 sf).
+
+We now investigate the effects this has on how fast the phytoplankton are growing, i.e. the primary production.
+
+```{r}
+# IntPP = Integrated Primary Production
+IntPP_nc <- open.nc("cesm_rcp85_intpp_zint_monthly_200601-210012.nc") # Primary production
+IntPP <- var.get.nc(IntPP_nc, 'intpp')  # Extract intpp data from intpp_nc
+
+df$IntPP_2006 <- as.vector(IntPP[,,12])   # Dec 2006
+df$IntPP_2100 <- as.vector(IntPP[,,1140]) # Dec 2100
+
+# Plot SST for Dec 2006
+plot3 <- ggplot(data = df, aes(x = Lon, y = Lat, fill = IntPP_2006)) + 
+  geom_raster() + scale_fill_gradientn(colours = matlab.like(12), guide = "colorbar", na.value = "gray") + 
+  theme_bw() + labs(fill = "") + ggtitle("Integrated primary production Dec 2006")
+
+# Plot SST for Dec 2100
+plot4 <- ggplot(data = df, aes(x = Lon, y = Lat, fill = IntPP_2100)) + 
+  geom_raster() + scale_fill_gradientn(colours = matlab.like(12), guide = "colorbar", na.value = "gray") + 
+  theme_bw() + labs(fill = "") + ggtitle("Integrated primary production Dec 2100")
+
+grid.arrange(plot3, plot4, ncol=1)
+
+# Calculate mean difference in primary production
+ppchange =mean(df$IntPP_2100 - df$IntPP_2006, na.rm=T)
+ppchange
+```
+
+From these maps we can see a general decrease in primary production, epecially in coastal areas. I calculated the mean change in IntPP and found an average decrease of 3.955745e-05 mmolC/m^2/s globally, which is 41.01316 mgC/m^2/d for each meter sq grid of ocean as viewed by a satellite.
+
+```{r, echo = FALSE}
+rm(IntPP_nc, SST_nc) # Clean up
+```
+
+## Q2. Estimating total fish biomass in the world
+```{r, echo=FALSE}
+###### FIRST CONVERT UNITS OF INTEGRATED PP TO STANDARD UNITS AND CALCULATE PP PER M^3
+# Convert units of Integrated PP (which is integrated from the surface to the bottom of the ocean)
+IntPP <- IntPP*12*(60*60*24)  # Convert mmolC/m^2/s to mgC/m^2/s, then from mgC/m^2/s to mgC/m^2/d
+
+PP <- IntPP/100               # Now IntPP is throughout the water column. 
+# Convert mgC/m^2/d to mgC/m^3/d by diving by 100 m, this assumes that all phytoplankton are distributed equally throughout the top 100 m (euphotic zone)
+
+###### 1. CALCULATE PHYTOPLANKTON MEDIAN CELL SIZE FOR EACH GRID AND MONTH
+# Need Chl-a for estimating median cell size, but no Chl-a provided, 
+# so estimate from Fig. 1b of Maranon et al. (2014) doi:10.1371/journal.pone.0099312
+# Chl <- (10^(-1.58/1.29))*((IntPP/100)^1/1.29)  # Chlorophyll concentration mg m^-3
+Chl <- 10^(log10(PP)/1.29-1.58/1.29) # Convert PP into Chl-a (mg/m^3)
+
+# Estimate median phytoplankton cell size (Wm) using equation from Table 3 
+# in Barnes et al. (2010) doi:10.1093/plankt/fbq088
+# Wm (gC) = Median phytoplankton cell size
+W_m <- 10^(1.34-0.043*SST+0.929*log10(Chl)) # Median phytoplankton cell size (in pgC)
+W_m <- (W_m/1e12)*10 # PgC to gC, then multiply by 10 to get wet weight
+
+# Now PP is by phytoplankton of varying sizes. So spread PP across 61 size bins
+# (assuming PP equal across all classes: Li 2002), 30 smaller than W_m, 30 larger
+# so only 1/61 of PP at median phytoplankotn cell size (Wm)
+PP_Wm <- IntPP/61 # PP_Wm (mgC/m^3/d) = All the primary production available at median phytoplankton size Wm
+
+# Note use IntPP not PP because all of the PP is available to the foodweb
+
+
+###### 2. CALCULATE ABUNDANCE OF PHYTOPLANKTON AT Wm
+# Set up variables for the model
+Alpha <- 0.125        # Trophic transfer efficiency (proportion of energy from trophic level n that reaches n+1
+                      # Default Alpha = 0.125
+Beta  <- 1000         # Predator Prey Mass Ratio (ratio of mass of predator to that of prey)
+                      # Default Beta = 1000
+E     <- 0.63          # Activation energy of metabolism (for calculating the change in physiological rates)
+                      # Default = 0.63
+k_b   <- 8.62e-05     # Boltzmann's constant (for calculating the change in physiological rates)
+K     <- SST + 273.15 # Temperature in Kelvin (SST is from the data given)
+
+# Calculate abundance of phytoplankton
+# General equation for daily production per individual From Brown et al. (2004)
+# Fits for organisms from bacteria to whales. Let's use it for phytoplankton
+P_Wm <- (exp(25.22 - E/(k_b*K))*W_m^0.75)/365 
+# P_Wm (mgC/individual/d) = Daily production per individual (for Wm) from Fig. 2 in Brown et al. (2004)
+
+# N_Wm = The number of phytoplankton at median phytoplankton size (Wm)
+# Number of individuals = The primary production of all phytoplankton in size bin Wm divided by their per individual production 
+# N_Wm (individuals/m^3) = (mgC/m^3/d) / (mgC/individual/day)
+N_Wm <- PP_Wm/P_Wm # Abundance of phytoplankton at Wm
+
+
+###### 3. CALCULATE INTERCEPT AND SLOPE OF ABUNDANCE SPECTRUM
+# Now the slope is independent of the amount of phytoplankton, and is only a function of:
+# Alpha (the trophic transfer efficiency) and the Beta (the Predator Prey Mass Ratio, PPMR)
+# *** See extra notes for derivation ***
+b <- log10(Alpha)/log10(Beta)-0.75
+# b = Slope of size spectrum (log10(abundance) vs log10(body size))
+
+# Calculate intercept of abundance spectrum
+# We know that N = aw^b, so a = N/w^b
+# So we can calculate the intercept a if we know the slope B and a point on the line (W_m, N_Wm)
+a <- N_Wm/(W_m^b)
+# a = Intercept of size spectrum (log10(abundance) with log10(body size))
+
+###### 4. CALCULATE BIOMASS BETWEEN ANY SIZE CLASSES (WEIGHTS)
+# Calculate biomass spectrum B(W) by integrating the abundance spectrum N(W)
+# Integral N(W)dW = aW^b dW = a/(b+1)*W^b+1
+
+# What is the biomass of the fish in the world?
+# Calculate total biomass between 1 g and 1 tonne (and assume they are all fish)
+W_min <- 1    # W_min = Minimum mass
+W_max <- 1e6  # W_max = Maximum mass
+Biom_conc <- (a/(b+1))*(W_max^(b+1) - W_min^(b+1)) # Definite integral between W_max and W_min
+# Biom_conc (g/m^3) = biomass concentration 
+Biom_conc <- Biom_conc/10^6 # Convert to tonnes/m^3
+
+# Now we can't just sum up every grid square because the area in each 1 deg square is not equal
+
+# Multiply by approximate surface area of grid squares to get total biomass
+Area_grid <- t(as.matrix(area(raster())))*1000*1000 # Area of 360x180 grid squares (in m^2)
+# raster() gives a default layer of 1o grids globally
+# area() gives the area in km^2 for an object of type raster
+# To convert km^2 to m^2: m^2 = km^2*1000*1000
+# And converted to matrix with correct orientation for the world
+
+# Biom_total (tonnes) = tonnes/m2 * m2 = Total biomass in each grid square
+Biom_total <- sweep(Biom_conc, c(1,2), Area_grid, '*')  # Total biomass (in tonnes) in each grid square = Product of area on lat/lon grid * Biom_conc)
+Biom_month <- apply(Biom_total, 3, sum, na.rm = TRUE)   # Total global biomass in each month. Sums fish biomass over 3rd margin (months)
+Biom_year  <- colMeans(matrix(Biom_month, 12)) # Total global biomass in each year
+```
+
+
+```{r}
+# Total fish catch in tonnes
+format(Biom_year[1], scientific = TRUE) # total biomass in 2006
+format(Biom_year[15], scientific = TRUE) # total biomass in 2020
+format(Biom_year[95], scientific = TRUE) # total biomass in 2100
+```
+
+Jennings et al. (2008) estimated the fish biomass would be 7.91 x 10^8 tonnes. Our estimate for the year 2020 was 4.76 x 10^9 tonnes, (for the year 2006, it was 4.94x10^9). Possible reasons for why these two estimates differ are: **INSERT REASONS HERE** 
+
+size classes of fish, we've just lumped them all together
+
+
+## Q3. Sensitivity analysis
+For each parameter that I test, I keep the others constant. I calculate the biomass estimate at each value of the parameter within our expected bounds, and then plot the results. I have added a line to each graph to indicate where the default value is set in our main analysis.
+
+First, we vary alpha...
+```{r}
+#Varying alpha, everything else remains constant
+Beta  <- 1000         # Predator Prey Mass Ratio
+E     <- 0.63         # Activation energy
+k_b   <- 8.62e-05     # Boltzmann's constant
+K     <- SST + 273.15 # Temperature in Kelvin
+W_min <- 1            # Minimum mass
+W_max <- 1e6          # Maximum mass
+
+# Alpha = Trophic transfer efficiency
+
+Avec = c(0.05, 0.125, 0.2)
+BioVec = rep(0,3)
+
+for (i in c(1,2,3))
+{
+  A = Avec[i]
+  P_Wm <- (exp(25.22 - E/(k_b*K))*W_m^0.75)/365 # Abundance of phytoplankton
+  N_Wm <- PP_Wm/P_Wm                            # Abundance of phytoplankton at Wm
+  b <- log10(A)/log10(Beta)-0.75                # Slope of size spectrum
+  a <- N_Wm/(W_m^b)                             # Intercept of size spectrum
+  Biom_conc <- (a/(b+1))*(W_max^(b+1) - W_min^(b+1))
+  Biom_conc <- Biom_conc/10^6                   # Convert to tonnes/m^3
+  Area_grid <- t(as.matrix(area(raster())))*1000*1000
+  Biom_total <- sweep(Biom_conc, c(1,2), Area_grid, '*')
+  Biom_month <- apply(Biom_total, 3, sum, na.rm = TRUE)
+  Biom_year  <- colMeans(matrix(Biom_month, 12)) # Total global biomass in each year
+  
+  TotalBio = format(Biom_year[15], scientific = TRUE) # total biomass in 2020
+  BioVec[i] = TotalBio
+}
+
+print(BioVec)
+plot(Avec,BioVec,
+     type="l",
+     main="Total Global Fish biomass vs Alpha values",
+     ylab="Biomass", xlab="Trophic Transfer Efficiency")
+abline(v=0.125, col="red")
+```
+
+We now vary beta...
+```{r}
+#Varying alpha, everything else remains constant
+Alpha  <- 0.125         # Predator Prey Mass Ratio
+E     <- 0.63         # Activation energy
+k_b   <- 8.62e-05     # Boltzmann's constant
+K     <- SST + 273.15 # Temperature in Kelvin
+W_min <- 1            # Minimum mass
+W_max <- 1e6          # Maximum mass
+
+
+Bvec = c(10, 100, 1000, 10000)
+BioVec = rep(0,4)
+
+for (i in c(1,2,3,4))
+{
+  B = Bvec[i]
+  P_Wm <- (exp(25.22 - E/(k_b*K))*W_m^0.75)/365 # Abundance of phytoplankton
+  N_Wm <- PP_Wm/P_Wm                            # Abundance of phytoplankton at Wm
+  b <- log10(Alpha)/log10(B)-0.75                # Slope of size spectrum
+  a <- N_Wm/(W_m^b)                             # Intercept of size spectrum
+  Biom_conc <- (a/(b+1))*(W_max^(b+1) - W_min^(b+1))
+  Biom_conc <- Biom_conc/10^6                   # Convert to tonnes/m^3
+  Area_grid <- t(as.matrix(area(raster())))*1000*1000
+  Biom_total <- sweep(Biom_conc, c(1,2), Area_grid, '*')
+  Biom_month <- apply(Biom_total, 3, sum, na.rm = TRUE)
+  Biom_year  <- colMeans(matrix(Biom_month, 12)) # Total global biomass in each year
+  
+  TotalBio = format(Biom_year[15], scientific = TRUE) # total biomass in 2020
+  BioVec[i] = TotalBio
+}
+
+print(BioVec)
+## First I did a normal plot, but then decided a log transformation for the x-axis would be better
+
+# plot(Bvec,BioVec,
+#      type="l",
+#      main="Total Global Fish biomass vs Beta values",
+#      ylab="Biomass", xlab="PPMR")
+
+plot(Bvec,BioVec,
+     type="l",
+     main="Total Global Fish biomass vs Beta values",
+     ylab="Biomass", xlab="PPMR",
+     log = "x")
+abline(v=1000, col="red")
+```
+
+
+And finally, we vary E...
+```{r}
+#Varying alpha, everything else remains constant
+Alpha  <- 0.125         # Predator Prey Mass Ratio
+Beta     <- 1000         # Activation energy
+k_b   <- 8.62e-05     # Boltzmann's constant
+K     <- SST + 273.15 # Temperature in Kelvin
+W_min <- 1            # Minimum mass
+W_max <- 1e6          # Maximum mass
+
+
+Evec = c(0.6,0.63,0.66,0.69)
+BioVec = rep(0,4)
+
+for (i in c(1,2,3,4))
+{
+  En = Evec[i]
+  P_Wm <- (exp(25.22 - En/(k_b*K))*W_m^0.75)/365 # Abundance of phytoplankton
+  N_Wm <- PP_Wm/P_Wm                            # Abundance of phytoplankton at Wm
+  b <- log10(Alpha)/log10(Beta)-0.75                # Slope of size spectrum
+  a <- N_Wm/(W_m^b)                             # Intercept of size spectrum
+  Biom_conc <- (a/(b+1))*(W_max^(b+1) - W_min^(b+1))
+  Biom_conc <- Biom_conc/10^6                   # Convert to tonnes/m^3
+  Area_grid <- t(as.matrix(area(raster())))*1000*1000
+  Biom_total <- sweep(Biom_conc, c(1,2), Area_grid, '*')
+  Biom_month <- apply(Biom_total, 3, sum, na.rm = TRUE)
+  Biom_year  <- colMeans(matrix(Biom_month, 12)) # Total global biomass in each year
+  
+  TotalBio = format(Biom_year[15], scientific = TRUE) # total biomass in 2020
+  BioVec[i] = TotalBio
+}
+
+print(BioVec)
+plot(Evec,BioVec,
+     type="l",
+     main="Total Global Fish biomass vs E values",
+     ylab="Biomass", xlab="Activation Energy")
+abline(v=0.63, col="red")
+```
+
+
+These graphs each show that variation in our parameters (within expected bounds) does affect our global biomass estimate quite significantly .i.e. Our output values are indeed sensitive to the assumptions we have made about trophic transfer efficiency, predator–prey mass ratios, and activation energy of metabolism. From the graphs, we can see that as each of these parameters increase, so does the estimate of global biomass.
+
+
+## Q4: What will happen to fish biomass in the future?
+
+## Global time series
+Firstly we calculate the percentage change in fish biomass compared with 2006, and plot this as a global time series.
+```{r}
+# Plot relative change in % over 21st century
+Years <- 2006:2100
+PercChange <- 100*(Biom_year/Biom_year[1])-100 # % Change each year compared with 2006
+
+plot(Years, PercChange, type = 'l', lwd = 1.2, 
+     ylab = '% Change',
+     xlab = 'Year', 
+     main = 'Change in Total Consumer Biomass \n  under RCP8.5')
+```
+From this graph we can see that our estimates of global fish biomass are decreasing significantly under RCP8.5, and by the end of the century we can expect the consumer biomass to have dropped by approximately 25%.
+
+## Change in biomass from the 2010s to the 2090s
+Here, we calculate the percentage change in fish biomass between the 2010s and 2090s
+```{r}
+# Calculate % change in biomass between 2010s and 2090s
+Biom_2011_2020 <- apply(Biom_conc[,,61:180], c(1,2), mean, na.rm = TRUE)
+Biom_2091_2100 <- apply(Biom_conc[,,1021:1140], c(1,2), mean, na.rm = TRUE)
+
+#Biom_change = Change in biomass between 2011-2020 and 2091-2100 for each 1 deg grid of the world
+Biom_change <- 100*(Biom_2091_2100/Biom_2011_2020)-100
+
+### NOTE: I changed the comparison data from 2006-2015 to 2011-2020 so we can accurately talk about the 2010s as a complete decade
+
+```
+We check the raw distribution of % changes in biomass from 2010s to 2090s, and modify any outliers.
+```{r}
+hist(Biom_change, xlim=c(-100,100), ylim=c(0,30000), 
+     xlab="% change", main="Raw distribution of % changes in biomass", breaks = 7)
+
+# Modify high outliers, everything above + or -50% 
+Biom_change[Biom_change > 50] <- 50
+Biom_change[Biom_change < -50] <- -50
+```
+
+We now use ggplot to plot these changes on a map.
+```{r}
+## GLOBAL MAPS OF FISH BIOMASS
+## Use ggplot to make plot map of change in fish biomass
+Biom_frame <- expand.grid(Lon = Lons, Lat = Lats)
+Biom_frame$Biom_change <- as.vector(Biom_change)
+
+ggplot(data = Biom_frame, aes(x = Lon, y = Lat, fill = Biom_change)) + 
+  geom_raster() + scale_fill_gradientn(colours = rev(matlab.like(12)), guide = "colorbar", na.value = "gray") + 
+  theme_bw() + labs(fill = "") + ggtitle("Fish biomass change 2090s - 2010s")
+```
+
+From this map we can see major decreases in fish biomass all over the globe, especially in coastal areas. In many areas we can expect that by the end of the century, the total catch of fish will be as low as half of what it currently is.
+
+However, we also notice that in the areas near to the poles, there are increases in fish biomass. This could suggest that fish will migrate to these colder climates when their own habitat becomes too hot.
+
+## Q5: Countries/regions most affected by climate change
+
+From our analysis so far, we can see that certain coastal areas will be most affected by climate change. Specifically countries such as Australia, Russia, and those found in the Mediterranean, Indonesia, and along the Eastern coast of Africa will all see significant decreases in the total fish catch within their Exclusive Economic Zones.
+
+This could have disasterous consequences for peoples' livelihoods in these countries, since many fisheries will no longer be profitable, and so these businesses will close and people will lose their jobs. For example, just looking at the eastern coast of Australia, we can see decreases in biomass by as much as 50%. We can expect the number of fisheries here to decrease as their business becomes less and less unprofitable.
+
+We also notice from our analysis, that we can actually expect increases in fish biomass in Antartica and along the north coast of greenland. We may see more fishing businesses pop up over there, either people may emmigrate to here if the climate becomes habitable enough, or nearby countries (such as Argentina) may start sending big fishing vessels into these waters to try and harvest more of these fish.
+
+
+## Q6: Global rate of decline in fish per degree c of warming
+Firstly I manipulate the data in order to obtain the average sea surface temperature for each year, then compare this to what it was in 2006 to obtain a measure of the warming of our oceans. I then plot this as a time series and add the change in biomass to the same graph in order to compare them.
+```{r}
+#Getting data on the SST average each year
+SST_month <- colMeans(SST,na.rm=TRUE, dims=2)
+SST_year  <- colMeans(matrix(SST_month, 12))
+
+#Computing the warming of the oceans
+SSTChange <- SST_year - SST_year[1]
+
+#Plotting global time series of both the temperature increase and fish biomass decrease 
+plot(Years, SSTChange, type = 'l', lwd = 1.2, lty = 1,
+     ylab = 'Temperature Change',
+     xlab = 'Year', 
+     main = 'Global change under RCP8.5')
+par(new=TRUE)
+plot(Years, PercChange, type = 'l', col="red", lty = 2, xlab="", ylab="", yaxt = "n", xaxt="n" )
+axis(side=4)
+mtext("% change in biomass", side = 4, line = -1)
+legend("left", c("SST change", "Biomass % change"),
+       col = c("black", "red"), lty = c(1, 2))
+```
+From this plot we can clearly see that throughout this century, the sea surface temperature will continue to increase, and sadly our global fish biomass will decrease.
+
+In order to invesigate the global rate of decline in fish per deg of warming, I plot the percentage change in biomass against the warming of our oceans and fit a simple regression model to the data...
+
+
+```{r}
+
+#BPW refers to Biomass Per (degree of) Warming
+BPW <- data.frame(SSTChange, PercChange, Biom_year, SST_year)
+
+lmod <- lm(formula = PercChange ~ SSTChange, data = BPW)
+
+plot(SSTChange, PercChange,
+     ylab = '% change in biomass',
+     xlab = 'Sea surface temperature warming', 
+     main = 'Percentage change in Biomass vs. \n Change in temperature',
+     pch = 16, cex=0.5
+     )
+abline(lmod, col="red", lwd=2)
+
+summary(lmod)
+
+# ggplot(BPW, aes(x = SSTChange, y = PercChange)) + 
+#   geom_point() +
+#   stat_smooth(method = "lm", col = "red")
+
+
+```
+
+From this graph, we can observe a linear relationship between the two variables. And from the linear model we can see that the slope of our regression line = -9.3995, which implies that for every degree of warming in our oceans, the total fish biomass is estimated to decrease by 9.4% (with reference to the levels in 2006). To convert this to tonnes per degree of warming, we take 9.4% of the estimated biomass in 2006.
+```{r}
+format((0.093395*4.944208e+09), scientific=TRUE)
+```
+And so we estimate the rate of decline in fish to be 4.62 x 10^8 tonnes per degree of warming.
+
+## Q7: Outline what the model is doing
+
+Our model extracts data from SST_nc and IntPP_nc in order to get monthly information about predicted sea surface temperatures and primary production globally between the years of 2006 and 2100. These predictions come from a General Circulation Model and uses the future scenario RCP8.5 (i.e. a high emissions forecast). We then use this data to run a simplified veresion of Jennings' model in order to estimate the global fish biomass for each year from 2006 to 2100.
+
+Firstly, the model converts the integrated primary production (IntPP) to simply the primary production (PP) per m^3 of ocean. This uses the assumption that phytoplankton are equally distributed throught the euphotic zone (top 100m of water).
+
+We then calculate the median phytoplankton cell size, and compute how much pp is at this median cell size. Then we use Brown's equation to compute the daily production per individual phytoplankton.
+
+Then we divide the daily pp of all pytoplankton at the median size, by their daily prodction per individual in order to get the number of individual phytoplankton at this size. This works because (mgC/m^3/day) / (mgC/individual/day) = individuals/m^3.
+
+We now calculate the slope of the abundance spectrum, which is dependant only on the trophic transfer efficiency (alpha) and the PPMR (Beta). And then we calculate the intercept too, simply by using the formula N = aw^b, so then the intercept a is N_Wm/(W_m^b).
+
+Finally, we calculate the biomass by integrating the abundance spectrum over all possible fish in the ocean, we use min mass = 1g and max mass = 1 tonne. The definite integral gives us the biomass concentration and we convert this to tonnes/m^3.
+
+Then we sum all the biomass in each grid square, but are careful to approximate the surface area of each grid  first since these are not all of equal size. Once we have summed the biomass within each square, we then sum over each grid to get the global biomass per month. And finally we sum these in groups of 12 in order to get estimates of the yearly gloabl biomass.
+
+
+
+
+
