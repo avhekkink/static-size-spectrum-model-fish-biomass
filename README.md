@@ -1,4 +1,4 @@
-# RStudio-projects
+# Static-size-spectrum-model
 Project done for my course MATH3070 'Natural Resource Mathematics' at UQ.
 
 The project uses a size spectrum model to predict how the total global fish biomass will change over the century due to climate change. 
